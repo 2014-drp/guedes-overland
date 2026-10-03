@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Guedes Overland</title>
+
+  <style>
+    body{
+      margin:0;
+      background:#171717;
+      color:white;
+      font-family:Arial,sans-serif;
+      text-align:center;
+    }
+    h1{margin:15px 0 5px}
+    .info{margin:8px}
+    button{
+      padding:12px 15px;
+      margin:4px;
+      border:none;
+      border-radius:10px;
+      font-size:16px;
+      cursor:pointer;
+    }
+    canvas{
+      display:block;
+      margin:10px auto;
+      width:min(94vw,400px);
+      background:#6e604c;
+      border-radius:14px;
+      touch-action:none;
+    }
+    .controls button{
+      width:62px;
+      height:52px;
+      font-size:22px;
+    }
+  </style>
+</head>
+
+<body>
+
+<h1>🚙 GUEDES OVERLAND</h1>
+
+<div class="info">
+Pontos: <b id="pontos">0</b> |
+Recorde: <b id="recorde">0</b><br>
+Fase: <b id="fase">1</b>/10 |
+Checkpoints: <b id="cp">0</b>/3
+</div>
+
+<button onclick="iniciar()">▶ JOGAR</button>
+<button onclick="trocarCarro()">🚙 CARRO</button>
+<button onclick="comprarRoupa()">🏁 PILOTO</button>
+
+<p id="msg">Chegue ao topo da montanha.</p>
+
+<canvas id="jogo" width="360" height="500"></canvas>
+
+<div class="controls">
+  <button id="cima">▲</button><br>
+  <button id="esq">◀</button>
+  <button id="baixo">▼</button>
+  <button id="dir">▶</button>
+</div>
+
+<script>
+const canvas = document.getElementById("jogo");
+const ctx = canvas.getContext("2d");
+
+let jogador = {x:180,y:445};
+let fase = 1;
+let pontos = Number(localStorage.getItem("goPontos")) || 0;
+let recorde = Number(localStorage.getItem("goRecorde")) || 0;
+let carro = Number(localStorage.getItem("goCarro")) || 0;
+let roupa = localStorage.getItem("goRoupa") || "normal";
+
+let cp = 0;
+let jogando = false;
+let pedras = [];
+let checkpoints = [];
+let move = {cima:false,baixo:false,esq:false,dir:false};
+
+const cores = [
+"#6b442e","#c59a58","#111111","#eeeeee","#477249",
+"#287aa1","#ba392d","#ad8853","#73777b","#c39c38"
+];
+
+const audio = {
+  ctx: null,
+  enabled: true
+};
+
+function initAudio(){
+  if (!audio.ctx) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    audio.ctx = new AudioCtx();
+  }
+  if (audio.ctx.state === "suspended") {
+    audio.ctx.resume();
+  }
+}
+
+function playTone({frequency=440, duration=0.12, type="square", volume=0.04, sweep=0, delay=0} = {}) {
+  if (!audio.enabled || !audio.ctx) return;
+
+  const osc = audio.ctx.createOscillator();
+  const gain = audio.ctx.createGain();
+
+  osc.type = type;
+  osc.frequency.setValueAtTime(frequency, audio.ctx.currentTime + delay);
+
+  if (sweep) {
+    osc.frequency.linearRampToValueAtTime(
+      frequency + sweep,
+      audio.ctx.currentTime + delay + duration
+    );
+  }
+
+  gain.gain.setValueAtTime(0.0001, audio.ctx.currentTime + delay);
+  gain.gain.exponentialRampToValueAtTime(volume, audio.ctx.currentTime + delay + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, audio.ctx.currentTime + delay + duration);
+
+  osc.connect(gain);
+  gain.connect(audio.ctx.destination);
+
+  osc.start(audio.ctx.currentTime + delay);
+  osc.stop(audio.ctx.currentTime + delay + duration);
+}
+
+function playStartSound() {
+  initAudio();
+  playTone({frequency:220, duration:0.14, type:"triangle", volume:0.05, sweep:160});
+  setTimeout(() => playTone({frequency:330, duration:0.16, type:"triangle", volume:0.05, sweep:200}), 120);
+}
+
+function playCheckpointSound() {
+  initAudio();
+  playTone({frequency:440, duration:0.1, type:"triangle", volume:0.05, sweep:80});
+  setTimeout(() => playTone({frequency:660, duration:0.12, type:"triangle", volume:0.05, sweep:120}), 100);
+}
+
+function playCrashSound() {
+  initAudio();
+  playTone({frequency:180, duration:0.16, type:"sawtooth", volume:0.05, sweep:-140});
+}
+
+function playLevelUpSound() {
+  initAudio();
+  playTone({frequency:520, duration:0.12, type:"square", volume:0.05, sweep:100});
+  setTimeout(() => playTone({frequency:680, duration:0.12, type:"square", volume:0.05, sweep:150}), 90);
+}
+
+function playBuySound() {
+  initAudio();
+  playTone({frequency:300, duration:0.12, type:"triangle", volume:0.05, sweep:80});
+  setTimeout(() => playTone({frequency:450, duration:0.14, type:"triangle", volume:0.05, sweep:110}), 90);
+}
+
+function playCarSound() {
+  initAudio();
+  playTone({frequency:240, duration:0.08, type:"square", volume:0.04, sweep:50});
+}
+
+function playWinSound() {
+  initAudio();
+  playTone({frequency:300, duration:0.12, type:"triangle", volume:0.05, sweep:100});
+  setTimeout(() => playTone({frequency:420, duration:0.12, type:"triangle", volume:0.05, sweep:120}), 100);
+  setTimeout(() => playTone({frequency:540, duration:0.18, type:"triangle", volume:0.05, sweep:170}), 200);
+}
+
+function salvar(){
+  localStorage.setItem("goPontos",pontos);
+  localStorage.setItem("goRecorde",recorde);
+  localStorage.setItem("goCarro",carro);
+  localStorage.setItem("goRoupa",roupa);
+}
+
+function atualizar(){
+  document.getElementById("pontos").textContent=pontos;
+  document.getElementById("recorde").textContent=recorde;
+  document.getElementById("fase").textContent=fase;
+  document.getElementById("cp").textContent=cp;
+  salvar();
+}
+
+function criarPedras(){
+  pedras=[];
+  for(let i=0;i<4+fase;i++){
+    pedras.push({
+      x:70+Math.random()*220,
+      y:70+Math.random()*330
+    });
+  }
+}
+
+function criarCheckpoints(){
+  checkpoints = [];
+  const posicoes = [
+    {x:100,y:120},
+    {x:250,y:210},
+    {x:150,y:300}
+  ];
+
+  for (let i = 0; i < 3; i++) {
+    checkpoints.push({
+      x: posicoes[i].x + (Math.random()*18 - 9),
+      y: posicoes[i].y + (Math.random()*18 - 9),
+      r: 14,
+      coletado: false
+    });
+  }
+}
+
+function iniciar(){
+  initAudio();
+  jogador.x=180;
+  jogador.y=445;
+  cp=0;
+  jogando=true;
+  criarPedras();
+  criarCheckpoints();
+  playStartSound();
+  document.getElementById("msg").textContent="Passe pelos checkpoints!";
+  atualizar();
+}
+
+function trocarCarro(){
+  initAudio();
+  carro=(carro+1)%10;
+  salvar();
+  playCarSound();
+  document.getElementById("msg").textContent=
+    "Carro "+(carro+1)+" selecionado.";
+}
+
+function comprarRoupa(){
+  initAudio();
+
+  if(roupa==="especial"){
+    document.getElementById("msg").textContent=
+      "Roupa especial já equipada.";
+    return;
+  }
+
+  if(pontos>=2500){
+    pontos-=2500;
+    roupa="especial";
+    atualizar();
+    playBuySound();
+    document.getElementById("msg").textContent=
+      "🏆 Capacete amarelo + macacão clássico liberados!";
+  }else{
+    playCrashSound();
+    document.getElementById("msg").
+      textContent="Você precisa de 2500 pontos para comprar a roupa especial.";
+  }
+}
+
+function verificarPedras(){
+  for(let i=0;i<pedras.length;i++){
+    let p = pedras[i];
+    let dx = jogador.x - p.x;
+    let dy = jogador.y - p.y;
+    let dist = Math.hypot(dx,dy);
+    if(dist < 18){
+      return true;
+    }
+  }
+  return false;
+}
+
+function verificarCheckpoints(){
+  for(let i=0;i<checkpoints.length;i++){
+    let c = checkpoints[i];
+    if(c.coletado) continue;
+
+    let dx = jogador.x - c.x;
+    let dy = jogador.y - c.y;
+    let dist = Math.hypot(dx,dy);
+
+    if(dist < 22){
+      c.coletado = true;
+      cp++;
+      playCheckpointSound();
+      atualizar();
+
+      if(cp >= 3){
+        document.getElementById("msg").textContent = "Meta alcançada! Chegue ao topo da montanha.";
+      }else{
+        document.getElementById("msg").textContent = "Checkpoint "+cp+"/3 conquistado!";
+      }
+      return;
+    }
+  }
+}
+
+function subirFase(){
+  if (fase >= 10) {
+    jogando = false;
+    pontos += 1500;
+    recorde = Math.max(recorde,pontos);
+    atualizar();
+    playWinSound();
+    document.getElementById("msg").textContent = "🏁 MISSÃO CONCLUÍDA! Você venceu a trilha.";
+    return;
+  }
+
+  fase += 1;
+  cp = 0;
+  jogador.x = 180;
+  jogador.y = 445;
+  criarPedras();
+  criarCheckpoints();
+  pontos += 300 + fase * 60;
+  recorde = Math.max(recorde,pontos);
+  atualizar();
+  playLevelUpSound();
+  document.getElementById("msg").textContent = "Fase "+fase+" iniciada! Siga em frente.";
+}
+
+function atualizarMovimento(){
+  if (!jogando) return;
+
+  if(move.cima) jogador.y -= 2.8;
+  if(move.baixo) jogador.y += 2.8;
+  if(move.esq) jogador.x -= 3.2;
+  if(move.dir) jogador.x += 3.2;
+
+  jogador.x=Math.max(26,Math.min(334,jogador.x));
+  jogador.y=Math.max(28,Math.min(470,jogador.y));
+}
+
+function loop(){
+  atualizarMovimento();
+
+  if(jogando){
+    verificarCheckpoints();
+
+    if(verificarPedras()){
+      pontos = Math.max(0,pontos-150);
+      recorde = Math.max(recorde,pontos);
+      criarPedras();
+      jogador.x=180;
+      jogador.y=445;
+      playCrashSound();
+      document.getElementById("msg").textContent = "Você bateu! Tente outra rota.";
+      atualizar();
+    }
+
+    if(cp >= 3 && jogador.y < 58){
+      pontos += 250 + fase * 90;
+      recorde = Math.max(recorde,pontos);
+      atualizar();
+      subirFase();
+    }
+  }
+
+  desenhar();
+  requestAnimationFrame(loop);
+}
+
+function desenhar(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // fundo
+  ctx.fillStyle = "#8ea2ad";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // montanhas
+  ctx.fillStyle = "#6d7c5f";
+  ctx.beginPath();
+  ctx.moveTo(0,500);
+  ctx.lineTo(0,260);
+  ctx.lineTo(80,180);
+  ctx.lineTo(130,220);
+  ctx.lineTo(190,140);
+  ctx.lineTo(260,220);
+  ctx.lineTo(320,180);
+  ctx.lineTo(360,260);
+  ctx.lineTo(360,500);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = "#4d5e4d";
+  ctx.beginPath();
+  ctx.moveTo(0,500);
+  ctx.lineTo(0,310);
+  ctx.lineTo(95,250);
+  ctx.lineTo(145,270);
+  ctx.lineTo(220,210);
+  ctx.lineTo(300,270);
+  ctx.lineTo(360,235);
+  ctx.lineTo(360,500);
+  ctx.closePath();
+  ctx.fill();
+
+  // estrada
+  ctx.fillStyle = "#4b423d";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // faixa
+  ctx.strokeStyle = "#d9d3b5";
+  ctx.lineWidth = 4;
+  ctx.setLineDash([14, 16]);
+  ctx.beginPath();
+  ctx.moveTo(180,0);
+  ctx.lineTo(180,500);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // bordas
+  ctx.strokeStyle = "#9f8578";
+  ctx.lineWidth = 8;
+  ctx.beginPath();
+  ctx.moveTo(30,0);
+  ctx.lineTo(30,500);
+  ctx.moveTo(330,0);
+  ctx.lineTo(330,500);
+  ctx.stroke();
+
+  // grama
+  ctx.fillStyle = "#3d5d3d";
+  ctx.fillRect(0,470,canvas.width,30);
+
+  // checkpoints
+  for(let i=0;i<checkpoints.length;i++){
+    let c = checkpoints[i];
+    if(c.coletado) continue;
+
+    ctx.fillStyle = "rgba(125,220,130,.85)";
+    ctx.beginPath();
+    ctx.arc(c.x,c.y,c.r,0,Math.PI*2);
+    ctx.fill();
+
+    ctx.strokeStyle = "#dfffe0";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(c.x,c.y,c.r+4,0,Math.PI*2);
+    ctx.stroke();
+  }
+
+  // pedras
+  for(let i=0;i<pedras.length;i++){
+    let p = pedras[i];
+    ctx.fillStyle = "#6a6d6b";
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,14,0,Math.PI*2);
+    ctx.fill();
+
+    ctx.fillStyle = "#505353";
+    ctx.beginPath();
+    ctx.arc(p.x-4,p.y-4,6,0,Math.PI*2);
+    ctx.fill();
+  }
+
+  // carro
+  let c = cores[carro % 10];
+  ctx.fillStyle = "#111";
+  ctx.fillRect(jogador.x-18,jogador.y-11,36,22);
+
+  ctx.fillStyle = c;
+  ctx.fillRect(jogador.x-14,jogador.y-10,28,20);
+
+  ctx.fillStyle = "#dfe8f5";
+  ctx.fillRect(jogador.x-10,jogador.y-6,20,8);
+
+  ctx.fillStyle = "#f9d75b";
+  ctx.fillRect(jogador.x-14,jogador.y-9,4,4);
+  ctx.fillRect(jogador.x+10,jogador.y-9,4,4);
+
+  ctx.fillStyle = "#1c1c1c";
+  ctx.fillRect(jogador.x-12,jogador.y-12,5,5);
+  ctx.fillRect(jogador.x+7,jogador.y-12,5,5);
+  ctx.fillRect(jogador.x-12,jogador.y+7,5,5);
+  ctx.fillRect(jogador.x+7,jogador.y+7,5,5);
+
+  if(roupa==="especial"){
+    ctx.fillStyle = "#f3d25d";
+    ctx.beginPath();
+    ctx.arc(jogador.x, jogador.y-16, 6, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.fillStyle = "#8c4734";
+    ctx.fillRect(jogador.x-9,jogador.y+10,18,7);
+    ctx.fillStyle = "#d8b35a";
+    ctx.fillRect(jogador.x-5,jogador.y+10,10,5);
+  }
+}
+
+document.addEventListener("keydown", e => {
+  initAudio();
+  if (e.key === "ArrowUp" || e.key === "w" || e.key === "W") move.cima = true;
+  if (e.key === "ArrowDown" || e.key === "s" || e.key === "S") move.baixo = true;
+  if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") move.esq = true;
+  if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") move.dir = true;
+});
+
+document.addEventListener("keyup", e => {
+  if (e.key === "ArrowUp" || e.key === "w" || e.key === "W") move.cima = false;
+  if (e.key === "ArrowDown" || e.key === "s" || e.key === "S") move.baixo = false;
+  if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") move.esq = false;
+  if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") move.dir = false;
+});
+
+document.getElementById("cima").addEventListener("pointerdown", () => { initAudio(); move.cima = true; });
+document.getElementById("cima").addEventListener("pointerup", () => move.cima = false);
+document.getElementById("cima").addEventListener("pointerleave", () => move.cima = false);
+
+document.getElementById("baixo").addEventListener("pointerdown", () => { initAudio(); move.baixo = true; });
+document.getElementById("baixo").addEventListener("pointerup", () => move.baixo = false);
+document.getElementById("baixo").addEventListener("pointerleave", () => move.baixo = false);
+
+document.getElementById("esq").addEventListener("pointerdown", () => { initAudio(); move.esq = true; });
+document.getElementById("esq").addEventListener("pointerup", () => move.esq = false);
+document.getElementById("esq").addEventListener("pointerleave", () => move.esq = false);
+
+document.getElementById("dir").addEventListener("pointerdown", () => { initAudio(); move.dir = true; });
+document.getElementById("dir").addEventListener("pointerup", () => move.dir = false);
+document.getElementById("dir").addEventListener("pointerleave", () => move.dir = false);
+
+atualizar();
+criarPedras();
+criarCheckpoints();
+desenhar();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
